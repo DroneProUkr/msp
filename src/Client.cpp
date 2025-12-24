@@ -1,4 +1,5 @@
 #include <Client.hpp>
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 
@@ -296,6 +297,41 @@ void Client::processOneMessage(const asio::error_code& ec,
         return;
     }
 
+    // Check if passthrough mode is active - forward raw data to callback
+    if(passthrough_active_.load()) {
+        std::function<void(const uint8_t*, size_t)> callback;
+        {
+            std::lock_guard<std::mutex> lock(mutex_raw_callback_);
+            callback = raw_receive_callback_;
+        }
+        
+        if(callback && bytes_transferred > 0) {
+            // Get pointer to buffer data and forward to callback
+            const auto& data = buffer.data();
+            auto begin = asio::buffers_begin(data);
+            auto end = asio::buffers_end(data);
+            size_t available = std::distance(begin, end);
+            
+            if(available > 0) {
+                std::vector<uint8_t> raw_data(available);
+                std::copy(begin, end, raw_data.begin());
+                buffer.consume(available);
+                callback(raw_data.data(), raw_data.size());
+            }
+        }
+        
+        // Continue reading in passthrough mode - use smaller reads for lower latency
+        asio::async_read(port,
+                         buffer,
+                         asio::transfer_at_least(1),
+                         std::bind(&Client::processOneMessage,
+                                   this,
+                                   std::placeholders::_1,
+                                   std::placeholders::_2));
+        return;
+    }
+
+    // Normal MSP processing mode
     // ignore and remove header bytes
     const uint8_t msg_marker = extractChar();
     if(msg_marker != '$')
@@ -506,6 +542,50 @@ ReceivedMessage Client::processOneMessageV2() {
     }
 
     return ret;
+}
+
+int Client::writeRaw(const uint8_t* data, size_t len) {
+    if(!isConnected()) return -1;
+    
+    asio::error_code ec;
+    std::size_t bytes_written;
+    {
+        std::lock_guard<std::mutex> lock(mutex_send);
+        bytes_written = asio::write(port, asio::buffer(data, len), ec);
+    }
+    
+    if(ec) {
+        if(log_level_ >= WARNING) {
+            std::cerr << "[MSP] writeRaw error: " << ec.message() << std::endl;
+        }
+        return -1;
+    }
+    
+    return static_cast<int>(bytes_written);
+}
+
+void Client::setRawReceiveCallback(std::function<void(const uint8_t*, size_t)> callback) {
+    std::lock_guard<std::mutex> lock(mutex_raw_callback_);
+    raw_receive_callback_ = callback;
+    passthrough_active_.store(callback != nullptr);
+}
+
+bool Client::isPassthroughActive() const {
+    return passthrough_active_.load();
+}
+
+void Client::enablePassthrough(std::function<void(const uint8_t*, size_t)> callback) {
+    if(log_level_ >= INFO) {
+        std::cout << "[MSP] Enabling passthrough mode" << std::endl;
+    }
+    setRawReceiveCallback(callback);
+}
+
+void Client::disablePassthrough() {
+    if(log_level_ >= INFO) {
+        std::cout << "[MSP] Disabling passthrough mode" << std::endl;
+    }
+    setRawReceiveCallback(nullptr);
 }
 
 }  // namespace client

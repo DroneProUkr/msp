@@ -120,6 +120,28 @@ INSTALL(FILES "${CMAKE_BINARY_DIR}/${PROJECT_NAME}.pc"
         DESTINATION lib/pkgconfig)
 
 
+###############################################################################
+### CPack configuration for generating .deb packages
+
+set(CPACK_PACKAGE_NAME "msp")
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION})
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "MSP (MultiWii Serial Protocol) library")
+set(CPACK_PACKAGE_DESCRIPTION "Implementation of the MultiWii Serial Protocol (MSP) for MultiWii, Cleanflight, and Betaflight flight controllers")
+set(CPACK_PACKAGE_VENDOR "DroneProUkr")
+set(CPACK_PACKAGE_CONTACT "dev@example.com")
+
+# Debian package specific settings
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Developer <dev@example.com>")
+set(CPACK_DEBIAN_PACKAGE_SECTION "libs")
+set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.17)")
+
+# Generator settings
+set(CPACK_GENERATOR "DEB")
+set(CPACK_SOURCE_GENERATOR "TGZ")
+
+include(CPack)
+
 
 ###############################################################################
 ### testing

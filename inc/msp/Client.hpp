@@ -335,6 +335,45 @@ protected:
      */
     uint8_t crcV2(uint8_t crc, const uint8_t& b) const;
 
+public:
+    // ========== RAW SERIAL PORT ACCESS FOR PASSTHROUGH MODE ==========
+    
+    /**
+     * @brief Write raw bytes directly to the serial port (bypasses MSP framing)
+     * Use this for Betaflight Configurator passthrough mode.
+     * @param data Pointer to data buffer
+     * @param len Length of data to write
+     * @return Number of bytes written, or -1 on error
+     */
+    int writeRaw(const uint8_t* data, size_t len);
+    
+    /**
+     * @brief Set callback for raw data received during passthrough mode.
+     * When set, ALL received bytes are forwarded to this callback instead of
+     * being processed as MSP messages. Set to nullptr to disable passthrough.
+     * @param callback Function to call with raw received data (data, length)
+     */
+    void setRawReceiveCallback(std::function<void(const uint8_t*, size_t)> callback);
+    
+    /**
+     * @brief Check if passthrough mode is active (raw callback is set)
+     * @return true if raw receive callback is active
+     */
+    bool isPassthroughActive() const;
+    
+    /**
+     * @brief Enable passthrough mode - stops normal MSP processing and 
+     * forwards all raw serial data to the callback.
+     * Call with nullptr callback to disable passthrough.
+     * @param callback Raw data callback, or nullptr to disable
+     */
+    void enablePassthrough(std::function<void(const uint8_t*, size_t)> callback);
+    
+    /**
+     * @brief Disable passthrough mode and resume normal MSP processing
+     */
+    void disablePassthrough();
+
 protected:
     asio::io_service io;     ///<! io service
     asio::serial_port port;  ///<! port for serial device
@@ -364,6 +403,11 @@ protected:
     // reference values
     int msp_ver_;
     FirmwareVariant fw_variant;
+    
+    // Raw passthrough mode for Betaflight Configurator
+    std::function<void(const uint8_t*, size_t)> raw_receive_callback_;
+    std::mutex mutex_raw_callback_;
+    std::atomic<bool> passthrough_active_{false};
 };
 
 }  // namespace client
