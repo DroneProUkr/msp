@@ -76,19 +76,41 @@ bool Client::startReadThread() {
     if(!isConnected()) return false;
     // can't start if we are already running
     if(running_.test_and_set()) return false;
+    std::cerr << "[MSP][startReadThread] starting read thread, port_open="
+              << port.is_open() << std::endl;
     // hit it!
     thread = std::thread([this] {
-        asio::async_read_until(port,
-                               buffer,
-                               std::bind(&Client::messageReady,
-                                         this,
-                                         std::placeholders::_1,
-                                         std::placeholders::_2),
-                               std::bind(&Client::processOneMessage,
-                                         this,
-                                         std::placeholders::_1,
-                                         std::placeholders::_2));
-        io.run();
+        try {
+            asio::async_read_until(port,
+                                   buffer,
+                                   std::bind(&Client::messageReady,
+                                             this,
+                                             std::placeholders::_1,
+                                             std::placeholders::_2),
+                                   std::bind(&Client::processOneMessage,
+                                             this,
+                                             std::placeholders::_1,
+                                             std::placeholders::_2));
+            io.run();
+            std::cerr << "[MSP][readThread] io.run() returned cleanly"
+                      << std::endl;
+        } catch(const std::system_error& e) {
+            std::cerr << "[MSP][readThread] CAUGHT std::system_error: "
+                      << e.what() << " (code=" << e.code().value()
+                      << " port_open=" << port.is_open()
+                      << ") — read thread exiting WITHOUT terminate()"
+                      << std::endl;
+            // Notify any waiters so they unblock
+            cv_response.notify_all();
+        } catch(const std::exception& e) {
+            std::cerr << "[MSP][readThread] CAUGHT std::exception: "
+                      << e.what() << std::endl;
+            cv_response.notify_all();
+        } catch(...) {
+            std::cerr << "[MSP][readThread] CAUGHT unknown exception"
+                      << std::endl;
+            cv_response.notify_all();
+        }
     });
     return true;
 }
@@ -186,9 +208,18 @@ bool Client::sendMessageNoWait(const msp::Message& message) {
 uint8_t Client::extractChar() {
     if(buffer.sgetc() == EOF) {
         if(log_level_ >= WARNING)
-            std::cerr << "buffer returned EOF; reading char directly from port"
-                      << std::endl;
-        asio::read(port, buffer, asio::transfer_exactly(1));
+            std::cerr << "[MSP][extractChar] buffer EOF; reading 1 byte from port (port_open="
+                      << port.is_open() << ")" << std::endl;
+        asio::error_code ec;
+        const std::size_t n =
+            asio::read(port, buffer, asio::transfer_exactly(1), ec);
+        if(ec || n != 1) {
+            std::cerr << "[MSP][extractChar] asio::read failed n=" << n
+                      << " ec=" << ec.message()
+                      << " (port_open=" << port.is_open() << ")"
+                      << " — returning 0 instead of throwing" << std::endl;
+            return 0;
+        }
     }
     return uint8_t(buffer.sbumpc());
 }
