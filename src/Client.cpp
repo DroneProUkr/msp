@@ -94,7 +94,8 @@ bool Client::startReadThread() {
             io.run();
             std::cerr << "[MSP][readThread] io.run() returned cleanly"
                       << std::endl;
-        } catch(const std::system_error& e) {
+        }
+        catch(const std::system_error& e) {
             std::cerr << "[MSP][readThread] CAUGHT std::system_error: "
                       << e.what() << " (code=" << e.code().value()
                       << " port_open=" << port.is_open()
@@ -102,11 +103,13 @@ bool Client::startReadThread() {
                       << std::endl;
             // Notify any waiters so they unblock
             cv_response.notify_all();
-        } catch(const std::exception& e) {
-            std::cerr << "[MSP][readThread] CAUGHT std::exception: "
-                      << e.what() << std::endl;
+        }
+        catch(const std::exception& e) {
+            std::cerr << "[MSP][readThread] CAUGHT std::exception: " << e.what()
+                      << std::endl;
             cv_response.notify_all();
-        } catch(...) {
+        }
+        catch(...) {
             std::cerr << "[MSP][readThread] CAUGHT unknown exception"
                       << std::endl;
             cv_response.notify_all();
@@ -120,7 +123,7 @@ bool Client::stopReadThread() {
     if(running_.test_and_set()) {
         io.stop();
         thread.join();
-        io.reset();
+        io.restart();
         rc = true;
     }
     running_.clear();
@@ -208,7 +211,8 @@ bool Client::sendMessageNoWait(const msp::Message& message) {
 uint8_t Client::extractChar() {
     if(buffer.sgetc() == EOF) {
         if(log_level_ >= WARNING)
-            std::cerr << "[MSP][extractChar] buffer EOF; reading 1 byte from port (port_open="
+            std::cerr << "[MSP][extractChar] buffer EOF; reading 1 byte from "
+                         "port (port_open="
                       << port.is_open() << ")" << std::endl;
         asio::error_code ec;
         const std::size_t n =
@@ -335,14 +339,14 @@ void Client::processOneMessage(const asio::error_code& ec,
             std::lock_guard<std::mutex> lock(mutex_raw_callback_);
             callback = raw_receive_callback_;
         }
-        
+
         if(callback && bytes_transferred > 0) {
             // Get pointer to buffer data and forward to callback
             const auto& data = buffer.data();
-            auto begin = asio::buffers_begin(data);
-            auto end = asio::buffers_end(data);
+            auto begin       = asio::buffers_begin(data);
+            auto end         = asio::buffers_end(data);
             size_t available = std::distance(begin, end);
-            
+
             if(available > 0) {
                 std::vector<uint8_t> raw_data(available);
                 std::copy(begin, end, raw_data.begin());
@@ -350,8 +354,9 @@ void Client::processOneMessage(const asio::error_code& ec,
                 callback(raw_data.data(), raw_data.size());
             }
         }
-        
-        // Continue reading in passthrough mode - use smaller reads for lower latency
+
+        // Continue reading in passthrough mode - use smaller reads for lower
+        // latency
         asio::async_read(port,
                          buffer,
                          asio::transfer_at_least(1),
@@ -577,35 +582,35 @@ ReceivedMessage Client::processOneMessageV2() {
 
 int Client::writeRaw(const uint8_t* data, size_t len) {
     if(!isConnected()) return -1;
-    
+
     asio::error_code ec;
     std::size_t bytes_written;
     {
         std::lock_guard<std::mutex> lock(mutex_send);
         bytes_written = asio::write(port, asio::buffer(data, len), ec);
     }
-    
+
     if(ec) {
         if(log_level_ >= WARNING) {
             std::cerr << "[MSP] writeRaw error: " << ec.message() << std::endl;
         }
         return -1;
     }
-    
+
     return static_cast<int>(bytes_written);
 }
 
-void Client::setRawReceiveCallback(std::function<void(const uint8_t*, size_t)> callback) {
+void Client::setRawReceiveCallback(
+    std::function<void(const uint8_t*, size_t)> callback) {
     std::lock_guard<std::mutex> lock(mutex_raw_callback_);
     raw_receive_callback_ = callback;
     passthrough_active_.store(callback != nullptr);
 }
 
-bool Client::isPassthroughActive() const {
-    return passthrough_active_.load();
-}
+bool Client::isPassthroughActive() const { return passthrough_active_.load(); }
 
-void Client::enablePassthrough(std::function<void(const uint8_t*, size_t)> callback) {
+void Client::enablePassthrough(
+    std::function<void(const uint8_t*, size_t)> callback) {
     if(log_level_ >= INFO) {
         std::cout << "[MSP] Enabling passthrough mode" << std::endl;
     }
