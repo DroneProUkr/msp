@@ -1,0 +1,21 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --buildsystem=cmake
+
+# BUILD_EXAMPLES defaults to ON upstream and produces five demo binaries that no
+# package installs, so it is pure build time. BUILD_TESTS is worse than useless
+# here: it downloads googletest at *configure* time, which a build container has
+# no business doing.
+override_dh_auto_configure:
+	dh_auto_configure -- \
+	  -DBUILD_EXAMPLES=OFF \
+	  -DBUILD_TESTS=OFF
+
+# Upstream installs libmsp_fcu.so and libmspclient.so with the SONAME equal to
+# the unversioned filename. dh_makeshlibs would refuse to generate a shlibs file
+# for that shape, and shipping an ldconfig trigger for libraries nothing can
+# depend on by SONAME only produces noise. Consumers name libmsp explicitly in
+# their own Depends, which is how the previously published packages behaved too.
+override_dh_makeshlibs:
+	dh_makeshlibs --no-scripts

@@ -1,0 +1,55 @@
+Source: libmsp
+Section: libs
+Priority: optional
+Maintainer: special-delivery <development@special-delivery.org>
+Build-Depends:
+ debhelper-compat (= 13),
+ libasio-dev,
+Standards-Version: 4.6.0
+Homepage: https://github.com/DroneProUkr/msp
+X-Style: black
+
+Package: libmsp
+Architecture: any
+Section: libs
+Depends:
+ ${misc:Depends},
+ ${shlibs:Depends},
+Description: MultiWii Serial Protocol library (runtime)
+ Implementation of the MultiWii Serial Protocol (MSP) for MultiWii,
+ Cleanflight and Betaflight flight controllers. Provides a serial client and
+ a higher-level flight controller API with publish/subscribe access to MSP
+ messages.
+ .
+ This package provides the shared libraries.
+
+Package: libmsp-dev
+Architecture: any
+Section: libdevel
+Depends:
+ libasio-dev,
+ libmsp (= ${binary:Version}),
+ ${misc:Depends},
+Description: MultiWii Serial Protocol library (development)
+ Implementation of the MultiWii Serial Protocol (MSP) for MultiWii,
+ Cleanflight and Betaflight flight controllers. Provides a serial client and
+ a higher-level flight controller API with publish/subscribe access to MSP
+ messages.
+ .
+ This package provides the headers and the pkg-config file.
+ .
+ libasio-dev is a hard dependency, not a build-time convenience: the installed
+ msp/Client.hpp includes <asio.hpp> and exposes asio types in its interface, so
+ anything that includes it needs asio present.
+
+Package: libmsp-doc
+Architecture: all
+Section: doc
+Multi-Arch: foreign
+Depends:
+ ${misc:Depends},
+Description: MultiWii Serial Protocol library (documentation)
+ Implementation of the MultiWii Serial Protocol (MSP) for MultiWii,
+ Cleanflight and Betaflight flight controllers.
+ .
+ This package provides the upstream README.
