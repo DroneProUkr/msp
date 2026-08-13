@@ -3985,6 +3985,8 @@ struct StatusEx : public StatusBase, public Message {
     // bf/cf fields
     Value<uint8_t> max_profiles;
     Value<uint8_t> control_rate_profile;
+    // Betaflight 3.3+: the reasons the flight controller refuses to arm
+    Value<uint32_t> armingDisableFlags;
     // iNav fields
     Value<uint16_t> avg_system_load_pct;
     Value<uint16_t> arming_flags;
@@ -3999,8 +4001,32 @@ struct StatusEx : public StatusBase, public Message {
             rc &= data.unpack(acc_calibration_axis_flags);
         }
         else {
+            // Betaflight and Cleanflight send the system load between the
+            // profile index (consumed by StatusBase) and the profile counts,
+            // exactly as iNav does -- reading the counts first shifts
+            // everything after them by two bytes.
+            rc &= data.unpack(avg_system_load_pct);
             rc &= data.unpack(max_profiles);
             rc &= data.unpack(control_rate_profile);
+
+            // Betaflight 3.3+ continues with a length-prefixed block of the
+            // flight mode flags that did not fit into the 32 bits read by
+            // StatusBase, and only then with the arming disable flags:
+            //   u8      number of extra flight mode flag bytes (n)
+            //   u8[n]   those bytes (box modes 32 and above)
+            //   u8      number of arming disable flags in use
+            //   u32     the flags themselves
+            // Older firmware ends after control_rate_profile, so the block is
+            // optional: a short frame leaves armingDisableFlags unset instead
+            // of failing the whole message. Skipping the length prefix and
+            // reading the u32 straight away yields box mode bits, not arming
+            // reasons.
+            Value<uint8_t> mode_flag_bytes;
+            if(!data.unpack(mode_flag_bytes)) return rc;
+            if(!data.consume(mode_flag_bytes())) return rc;
+            Value<uint8_t> arming_flag_count;
+            if(!data.unpack(arming_flag_count)) return rc;
+            data.unpack(armingDisableFlags);
         }
         return rc;
     }
