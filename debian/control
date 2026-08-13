@@ -15,6 +15,14 @@ Section: libs
 Depends:
  ${misc:Depends},
  ${shlibs:Depends},
+# The relic monolithic package shipped the same two shared objects under a
+# different package name, so dpkg refuses to unpack this one over it ("trying to
+# overwrite /usr/lib/libmsp_fcu.so, which is also in package msp"). Worse, apt
+# cannot untangle it by itself on a drone that already has both a consumer and the
+# relic installed. Conflicts+Replaces lets apt retire msp automatically instead of
+# every deployment script having to know about it.
+Conflicts: msp
+Replaces: msp
 Description: MultiWii Serial Protocol library (runtime)
  Implementation of the MultiWii Serial Protocol (MSP) for MultiWii,
  Cleanflight and Betaflight flight controllers. Provides a serial client and
