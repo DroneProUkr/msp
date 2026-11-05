@@ -5567,9 +5567,13 @@ struct InavSetRateProfile : public InavRateProfileSettings, public Message {
 struct InavAirSpeed : public InavMiscSettings, public Message {
     InavAirSpeed(FirmwareVariant v) : Message(v) {}
 
-    virtual ID id() const override { return ID::MSP2_INAV_RATE_PROFILE; }
+    // Was MSP2_INAV_RATE_PROFILE, copied from InavRateProfile above. A Subscription asks
+    // the FC for id() and matches the reply against it, so an airspeed poll fetched the
+    // rate profile instead and `speed` never decoded: every consumer saw an unset value
+    // forever, on firmware that answers 0x2009 correctly.
+    virtual ID id() const override { return ID::MSP2_INAV_AIR_SPEED; }
 
-    Value<uint32_t> speed;
+    Value<uint32_t> speed;    // cm/s
 
     virtual bool decode(const ByteVector& data) override {
         return data.unpack(speed);
