@@ -5569,8 +5569,13 @@ struct InavAirSpeed : public InavMiscSettings, public Message {
 
     // Was MSP2_INAV_RATE_PROFILE, copied from InavRateProfile above. A Subscription asks
     // the FC for id() and matches the reply against it, so an airspeed poll fetched the
-    // rate profile instead and `speed` never decoded: every consumer saw an unset value
-    // forever, on firmware that answers 0x2009 correctly.
+    // rate profile instead -- and iNav implements 0x2007, so the reply MATCHED and
+    // decode() unpacked the rate profile's first four bytes as a uint32 of cm/s:
+    //   rcMid8 | rcExpo8<<8 | dynPID<<16 | (pa_breakpoint & 0xFF)<<24
+    // On a default profile that is 0xDC000032; an aircraft running this on 2026-11-08
+    // reported exactly 3690987570 cm/s. So `speed` did not stay unset -- it carried a
+    // plausible-looking number ~37000 km/s wide, which a consumer cannot tell from a
+    // real reading. Range-check it; "the FC did not answer" was never the failure mode.
     virtual ID id() const override { return ID::MSP2_INAV_AIR_SPEED; }
 
     Value<uint32_t> speed;    // cm/s
