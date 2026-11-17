@@ -38,7 +38,18 @@ bool Client::start(const std::string& device, const size_t baudrate) {
 }
 
 bool Client::stop() {
-    return disconnectPort() && stopReadThread() && stopSubscriptions();
+    // The read thread ends first and the port is closed after it. Closing the
+    // port under a running read thread races with the read that thread is
+    // starting, and leaves that read's completion queued in `io`, where the
+    // next start() would run it against the new port.
+    const bool stopped = stopReadThread();
+    const bool closed  = disconnectPort();
+    // Closing cancelled the pending read. Run its completion, and anything
+    // else the read thread did not get to, here: nothing may stay queued for
+    // the next start(). Every handler returns at once on a closed port.
+    io.poll();
+    io.restart();
+    return closed && stopped && stopSubscriptions();
 }
 
 bool Client::connectPort(const std::string& device, const size_t baudrate) {
@@ -64,6 +75,8 @@ bool Client::connectPort(const std::string& device, const size_t baudrate) {
 
 bool Client::disconnectPort() {
     asio::error_code ec;
+    // writers use the port from their own threads
+    std::lock_guard<std::mutex> lock(mutex_send);
     port.close(ec);
     if(ec) return false;
     return true;
@@ -78,6 +91,9 @@ bool Client::startReadThread() {
     if(running_.test_and_set()) return false;
     std::cerr << "[MSP][startReadThread] starting read thread, port_open="
               << port.is_open() << std::endl;
+    // bytes left over from the previous connection are not the start of
+    // anything on this one
+    buffer.consume(buffer.size());
     // hit it!
     thread = std::thread([this] {
         try {
@@ -209,21 +225,15 @@ bool Client::sendMessageNoWait(const msp::Message& message) {
 }
 
 uint8_t Client::extractChar() {
+    // Never read from the port here. This runs inside the read handler, where
+    // a blocking read waits for a byte that may never come and cannot be
+    // interrupted: stop() would then wait for the read thread forever.
+    // processOneMessage() only parses frames that messageReady() has seen
+    // complete, so an empty buffer means the two disagree on a frame length.
     if(buffer.sgetc() == EOF) {
-        if(log_level_ >= WARNING)
-            std::cerr << "[MSP][extractChar] buffer EOF; reading 1 byte from "
-                         "port (port_open="
-                      << port.is_open() << ")" << std::endl;
-        asio::error_code ec;
-        const std::size_t n =
-            asio::read(port, buffer, asio::transfer_exactly(1), ec);
-        if(ec || n != 1) {
-            std::cerr << "[MSP][extractChar] asio::read failed n=" << n
-                      << " ec=" << ec.message()
-                      << " (port_open=" << port.is_open() << ")"
-                      << " — returning 0 instead of throwing" << std::endl;
-            return 0;
-        }
+        std::cerr << "[MSP][extractChar] frame ended early; returning 0"
+                  << std::endl;
+        return 0;
     }
     return uint8_t(buffer.sbumpc());
 }
@@ -325,12 +335,35 @@ void Client::processOneMessage(const asio::error_code& ec,
         std::cout << "processOneMessage on " << bytes_transferred << " bytes"
                   << std::endl;
 
-    if(ec == asio::error::operation_aborted) {
+    if(ec == asio::error::operation_aborted || !port.is_open()) {
         // operation_aborted error probably means the client is being closed
         // notify waiting request methods
         cv_response.notify_all();
         return;
     }
+
+    if(ec) {
+        // A read that failed (the device went away) fails the same way when
+        // repeated: re-arming it would spin this thread on the error.
+        std::cerr << "[MSP][readThread] read failed: " << ec.message()
+                  << " — reading stops until the client is restarted"
+                  << std::endl;
+        cv_response.notify_all();
+        return;
+    }
+
+    const auto read_next_message = [this] {
+        asio::async_read_until(port,
+                               buffer,
+                               std::bind(&Client::messageReady,
+                                         this,
+                                         std::placeholders::_1,
+                                         std::placeholders::_2),
+                               std::bind(&Client::processOneMessage,
+                                         this,
+                                         std::placeholders::_1,
+                                         std::placeholders::_2));
+    };
 
     // Check if passthrough mode is active - forward raw data to callback
     if(passthrough_active_.load()) {
@@ -368,21 +401,31 @@ void Client::processOneMessage(const asio::error_code& ec,
     }
 
     // Normal MSP processing mode
+    // messageReady() completes the read on one of two things: a whole frame at
+    // the front of the buffer, or `bytes_transferred` bytes that cannot start
+    // one. Only a whole frame is parsed, so that the parser never has to wait
+    // for input; the rest is dropped up to the next possible frame start.
+    {
+        const auto data  = buffer.data();
+        const auto first = asio::buffers_begin(data);
+        const bool is_frame =
+            buffer.size() >= 2 && *first == '$' &&
+            (*(first + 1) == 'M' || *(first + 1) == 'X');
+        if(!is_frame) {
+            if(buffer.size() > 0)
+                std::cerr << "Message marker " << size_t(uint8_t(*first))
+                          << " is not recognised!" << std::endl;
+            buffer.consume(bytes_transferred);
+            read_next_message();
+            return;
+        }
+    }
+
     // ignore and remove header bytes
-    const uint8_t msg_marker = extractChar();
-    if(msg_marker != '$')
-        std::cerr << "Message marker " << size_t(msg_marker)
-                  << " is not recognised!" << std::endl;
+    extractChar();
 
     // message version
-    int ver                  = 0;
-    const uint8_t ver_marker = extractChar();
-    if(ver_marker == 'M') ver = 1;
-    if(ver_marker == 'X') ver = 2;
-    if(ver == 0) {
-        std::cerr << "Version marker " << size_t(ver_marker)
-                  << " is not recognised!" << std::endl;
-    }
+    const int ver = (extractChar() == 'X') ? 2 : 1;
 
     ReceivedMessage recv_msg;
     if(ver == 2)
@@ -409,16 +452,7 @@ void Client::processOneMessage(const asio::error_code& ec,
         }
     }
 
-    asio::async_read_until(port,
-                           buffer,
-                           std::bind(&Client::messageReady,
-                                     this,
-                                     std::placeholders::_1,
-                                     std::placeholders::_2),
-                           std::bind(&Client::processOneMessage,
-                                     this,
-                                     std::placeholders::_1,
-                                     std::placeholders::_2));
+    read_next_message();
 
     if(log_level_ >= DEBUG)
         std::cout << "processOneMessage finished" << std::endl;
@@ -446,8 +480,9 @@ std::pair<iterator, bool> Client::messageReady(iterator begin,
         // not even enough data for a header
         if(available < 9) return std::make_pair(begin, false);
 
+        // all 16 bits: the frame has to be complete before it is parsed
         const uint16_t payload_size =
-            uint8_t(*(i + 6)) | uint8_t(*(i + 7) << 8);
+            uint16_t(uint8_t(*(i + 6)) | (uint8_t(*(i + 7)) << 8));
 
         // incomplete xfer
         if(available < size_t(8 + payload_size + 1))
@@ -456,7 +491,10 @@ std::pair<iterator, bool> Client::messageReady(iterator begin,
         std::advance(i, 8 + payload_size + 1);
     }
     else {
-        for(; i != end; ++i) {
+        // not a frame start: skip to the next '$'. The first byte is always
+        // skipped, also when it is a '$' itself, so that every completed
+        // read makes progress.
+        for(++i; i != end; ++i) {
             if(*i == '$') break;
         }
         // implicitly consume all if $ not found
